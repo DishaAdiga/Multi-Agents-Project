@@ -40,7 +40,7 @@ pip install -r requirements.txt
 ### Step 2 — Download all XML files
 
 ```bash
-python datas/src/orphadata_download.py
+python datas/orphadata_download.py
 ```
 
 Files are saved to `datas/xml_data/`.
@@ -59,7 +59,6 @@ en_product9_prev.xml  ← disease prevalence
 
 Delete all `fr_`, `de_`, `pt_` and other non-English files. Delete all `en_product3_*.xml` and `en_product7.xml` files — these are classification/admin files not needed for diagnosis.
 
-**PowerShell:**
 ```powershell
 # Delete all non-English files
 Get-ChildItem -Filter "*.xml" | Where-Object { $_.Name -notmatch "^en_" } | Remove-Item
@@ -67,15 +66,6 @@ Get-ChildItem -Filter "*.xml" | Where-Object { $_.Name -notmatch "^en_" } | Remo
 # Delete product3 and product7
 Get-ChildItem -Filter "en_product3_*.xml" | Remove-Item
 Remove-Item en_product7.xml -ErrorAction SilentlyContinue
-```
-
-**bash:**
-```bash
-# Delete all non-English files
-find . -name "*.xml" ! -name "en_*" -delete
-
-# Delete product3 and product7
-rm -f en_product3_*.xml en_product7.xml
 ```
 
 ### Step 4 — Convert XML to JSON
@@ -86,7 +76,7 @@ python datas/src/orphadata_xml2json.py
 
 JSON files are saved to `datas/json_data/`.
 
-**Final output:** 5 JSON files, ~147MB total.
+**Final output:** 5 JSON files
 
 ---
 
@@ -94,13 +84,12 @@ JSON files are saved to `datas/json_data/`.
 
 Download the ontology file using its permanent URL:
 
-**PowerShell:**
 ```powershell
 Invoke-WebRequest -Uri "http://purl.obolibrary.org/obo/hp.obo" -OutFile "hp.obo"
 ```
 > **Note:** `phenotype.hpoa` (disease-symptom annotations) is not separately needed — this information is already covered by Orphanet `en_product4.xml`.
 
-**Final output:** `hp.obo`, ~10MB.
+**Final output:** `hp.obo`
 
 ---
 
@@ -108,14 +97,8 @@ Invoke-WebRequest -Uri "http://purl.obolibrary.org/obo/hp.obo" -OutFile "hp.obo"
 
 ### Step 1 — Download
 
-**PowerShell:**
 ```powershell
 Invoke-WebRequest -Uri "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz" -OutFile "variant_summary.txt.gz"
-```
-
-**bash:**
-```bash
-curl -O https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz
 ```
 
 File size: ~435MB compressed.
@@ -128,17 +111,6 @@ Run `filter_clinvar.py` in the same folder as the downloaded file.
 python filter_clinvar.py
 ```
 
-Takes 3–5 minutes. After confirming `clinvar_filtered.json` looks correct, delete the raw file:
-
-**PowerShell:**
-```powershell
-Remove-Item variant_summary.txt.gz
-```
-
-**bash:**
-```bash
-rm variant_summary.txt.gz
-```
 
 **Final output:** `clinvar_filtered.json`, ~50–80MB.
 
@@ -156,38 +128,14 @@ Run `fetch_pubmed.py` and run it from the folder containing your Orphanet JSON f
 python fetch_pubmed.py
 ```
 
-> This runs for 2–3 hours. Leave it overnight. It saves a checkpoint every 100 diseases so it won't lose progress if interrupted.
-
-**Final output:** `pubmed_abstracts.json`, ~150–250MB.
+**Final output:** `rare_disease_abstracts.json`, ~150–250MB.
 
 ---
 
 ## Source 5: LabQAR — Lab Reference Ranges
 
-```bash
-git clone https://github.com/balubhasuran/LabQAR.git
-```
+Generate a sample json with around 200 reports.
 
-No processing needed. The dataset inside contains 550 lab test reference ranges across 363 unique tests, LOINC-mapped, with specimen types and gender/age variations.
-
-**Final output:** CSV/JSON files inside the `LabQAR/` folder, ~1MB.
+**Final output:** CSV/JSON files
 
 ---
-
-## Final Data Checklist
-
-```
-File/Folder                     Size (approx)    Source
-────────────────────────────────────────────────────────
-en_product1.json                ~25MB            Orphanet
-en_product4.json                ~20MB            Orphanet
-en_product6.json                ~10MB            Orphanet
-en_product9_ages.json           ~3MB             Orphanet
-en_product9_prev.json           ~7MB             Orphanet
-hp.obo                          ~10MB            HPO
-clinvar_filtered.json           ~50-80MB         ClinVar
-pubmed_abstracts.json           ~150-250MB       PubMed
-LabQAR/                         ~1MB             LabQAR
-────────────────────────────────────────────────────────
-Total                           ~280-400MB
-```
