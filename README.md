@@ -191,14 +191,3 @@ LabQAR/                         ~1MB             LabQAR
 ────────────────────────────────────────────────────────
 Total                           ~280-400MB
 ```
-
----
-
-## Notes
-
-- All data sources are free and open access. No payment required.
-- Orphanet data is licensed under CC BY 4.0 — attribution required.
-- ClinVar and PubMed are NCBI resources in the public domain.
-- HPO is licensed under CC BY 4.0.
-- LabQAR is a research dataset — cite the original paper if publishing.
-- Re-run downloads periodically — Orphanet updates twice a year (July/December), ClinVar and HPO update monthly.
