@@ -2,7 +2,8 @@ import json
 import re
 from collections import defaultdict
 
-# HELPER FUNCTIONS
+
+# ── HELPER FUNCTIONS ──────────────────────────────────────────────────────────
 
 def load_ndjson(path: str) -> list:
     """
@@ -20,7 +21,6 @@ def load_ndjson(path: str) -> list:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            # Skip Elasticsearch index lines
             if "index" in obj or "_index" in obj:
                 continue
             records.append(obj)
@@ -34,19 +34,13 @@ def strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text).strip()
 
 
-#PARSER 1: en_product1
+# ── PARSER 1: en_product1 ─────────────────────────────────────────────────────
 
 def parse_product1(path: str) -> dict:
     """
     Parses en_product1.json — disease names, definitions, synonyms, external refs.
     Returns dict keyed by orphacode string.
-
-    Key fields extracted:
-      - name          : "Preferred term"
-      - synonyms      : "Synonym" list (can be null)
-      - definition    : "SummaryInformation[0].Definition" (HTML stripped)
-      - external_refs : {Source: Reference} for OMIM, ICD-10, ICD-11, MONDO
-      - typology      : "Disease" / "Clinical group" / etc
+    Filters out OBSOLETE and NON RARE IN EUROPE entries.
     """
     records = load_ndjson(path)
     diseases = {}
@@ -54,6 +48,14 @@ def parse_product1(path: str) -> dict:
     for rec in records:
         code = str(rec.get("ORPHAcode", "")).strip()
         if not code:
+            continue
+
+        name = rec.get("Preferred term", "").strip()
+
+        # ── FIX 1: Filter obsolete and non-rare entries ──
+        if not name:
+            continue
+        if name.startswith("OBSOLETE:") or name.startswith("NON RARE IN EUROPE:"):
             continue
 
         # Synonyms — can be null or a list
@@ -79,7 +81,7 @@ def parse_product1(path: str) -> dict:
 
         diseases[code] = {
             "orphacode":      code,
-            "name":           rec.get("Preferred term", "").strip(),
+            "name":           name,
             "synonyms":       synonyms,
             "definition":     definition,
             "typology":       rec.get("Typology", ""),
@@ -87,45 +89,56 @@ def parse_product1(path: str) -> dict:
             "external_refs":  ext_refs,
             # placeholders — filled by later parsers
             "symptoms":       [],
+            "symptoms_full":  [],
             "genes":          [],
+            "genes_full":     [],
             "onset":          [],
             "inheritance":    [],
             "abstracts":      [],
         }
 
-    print(f"[product1] {len(diseases)} records loaded")
+    print(f"[product1] {len(diseases)} records loaded (OBSOLETE/NON RARE filtered)")
     return diseases
 
 
-#PARSER 2: en_product4 
+# ── PARSER 2: en_product4 ─────────────────────────────────────────────────────
 
 def parse_product4(path: str) -> dict:
     """
     Parses en_product4.json — HPO symptom associations per disease.
     Returns dict keyed by orphacode string.
 
-    Structure: each record has "Disorder" → "HPODisorderAssociation" list
-    Each association has "HPO" → {"HPOId", "HPOTerm"} + "HPOFrequency"
-
-    Returns: {orphacode: [{"hpo_id": ..., "term": ..., "frequency": ...}]}
+    Each association has HPOId, HPOTerm, and HPOFrequency.
     """
     records = load_ndjson(path)
     symptom_map = {}
 
     for rec in records:
+        # ── FIX 2: Fallback for orphacode location ──
         disorder = rec.get("Disorder", {})
-        code = str(disorder.get("ORPHAcode", "")).strip()
+        code = str(
+            disorder.get("ORPHAcode", "") or rec.get("ORPHAcode", "")
+        ).strip()
         if not code:
             continue
 
         associations = disorder.get("HPODisorderAssociation") or []
-        symptoms = []
+        if not associations:
+            # fallback: maybe associations are at top level
+            associations = rec.get("HPODisorderAssociation") or []
 
+        symptoms = []
         for assoc in associations:
-            hpo = assoc.get("HPO", {})
-            hpo_id   = hpo.get("HPOId", "")
+            hpo      = assoc.get("HPO", {})
+            hpo_id   = hpo.get("HPOId", "").strip()
             hpo_term = hpo.get("HPOTerm", "").strip()
-            frequency = assoc.get("HPOFrequency", "").strip()
+
+            # Frequency can be a string or nested dict
+            freq_raw = assoc.get("HPOFrequency", "")
+            if isinstance(freq_raw, dict):
+                frequency = freq_raw.get("Name", "") or freq_raw.get("Label", "")
+            else:
+                frequency = str(freq_raw).strip()
 
             if hpo_term:
                 symptoms.append({
@@ -140,16 +153,12 @@ def parse_product4(path: str) -> dict:
     return symptom_map
 
 
-#PARSER 3: en_product6
+# ── PARSER 3: en_product6 ─────────────────────────────────────────────────────
 
 def parse_product6(path: str) -> dict:
     """
     Parses en_product6.json — gene associations per disease.
     Returns dict keyed by orphacode string.
-
-    Structure: "DisorderGeneAssociation" list → each has "Gene" → "Symbol"
-
-    Returns: {orphacode: [{"symbol": ..., "name": ..., "type": ...}]}
     """
     records = load_ndjson(path)
     gene_map = {}
@@ -163,10 +172,18 @@ def parse_product6(path: str) -> dict:
         genes = []
 
         for assoc in associations:
-            gene = assoc.get("Gene", {})
+            gene   = assoc.get("Gene", {})
             symbol = gene.get("Symbol", "").strip()
             name   = gene.get("Preferred term", "").strip()
-            gtype  = gene.get("GeneType", "").strip()
+
+            # ── FIX 3: GeneType is a nested list/dict ──
+            gtype_raw = gene.get("GeneType") or []
+            if isinstance(gtype_raw, list):
+                gtype = gtype_raw[0].get("Name", "") if gtype_raw and isinstance(gtype_raw[0], dict) else (gtype_raw[0] if gtype_raw else "")
+            elif isinstance(gtype_raw, dict):
+                gtype = gtype_raw.get("Name", "")
+            else:
+                gtype = str(gtype_raw).strip()
 
             if symbol:
                 genes.append({
@@ -181,16 +198,15 @@ def parse_product6(path: str) -> dict:
     return gene_map
 
 
-#PARSER 4: en_product9
+# ── PARSER 4: en_product9 ─────────────────────────────────────────────────────
 
 def parse_product9(path: str) -> dict:
     """
     Parses en_product9_ages.json — onset age and inheritance pattern.
     Returns dict keyed by orphacode string.
 
-    Fields: "AverageAgeOfOnset" (list of strings), "TypeOfInheritance" (list)
-
-    Returns: {orphacode: {"onset": [...], "inheritance": [...]}}
+    AverageAgeOfOnset and TypeOfInheritance can be lists of strings
+    or lists of dicts with a "Name" key depending on Orphanet version.
     """
     records = load_ndjson(path)
     onset_map = {}
@@ -200,34 +216,39 @@ def parse_product9(path: str) -> dict:
         if not code:
             continue
 
-        onset = [
-            o.strip() for o in (rec.get("AverageAgeOfOnset") or [])
-            if o and o.strip()
-        ]
-        inheritance = [
-            i.strip() for i in (rec.get("TypeOfInheritance") or [])
-            if i and i.strip()
-        ]
+        def extract_list(field):
+            raw = rec.get(field) or []
+            result = []
+            for item in raw:
+                if isinstance(item, dict):
+                    # Try all possible key names
+                    val = (item.get("Name") or 
+                        item.get("Label") or 
+                        item.get("Preferred term") or 
+                        item.get("value") or "")
+                else:
+                    val = str(item)
+                val = val.strip()
+                if val:
+                    result.append(val)
+            return result
 
         onset_map[code] = {
-            "onset":       onset,
-            "inheritance": inheritance,
+            "onset":       extract_list("AverageAgeOfOnset"),
+            "inheritance": extract_list("TypeOfInheritance"),
         }
 
     print(f"[product9] {len(onset_map)} diseases with onset/inheritance data")
     return onset_map
 
 
-#PARSER 5: hp.json
+# ── PARSER 5: hp.json ─────────────────────────────────────────────────────────
 
 def parse_hp(path: str) -> dict:
     """
     Parses hp.json — the HPO ontology.
-    Builds a lookup: HP:xxxxxxx → {"label": ..., "definition": ..., "synonyms": [...]}
-
-    Structure: data["graphs"][0]["nodes"] — each node is one HPO term.
-    Node id format: "http://purl.obolibrary.org/obo/HP_0000001"
-    We convert to standard "HP:0000001" format.
+    Builds lookup: HP:xxxxxxx → {label, definition, synonyms}
+    Used to enrich symptom text in RAG embeddings.
     """
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
@@ -237,27 +258,22 @@ def parse_hp(path: str) -> dict:
 
     for node in nodes:
         raw_id = node.get("id", "")
-        # Convert URL format to HP:xxxxxxx format
-        # "http://.../HP_0000256" → "HP:0000256"
         if "HP_" not in raw_id:
             continue
         hp_id = "HP:" + raw_id.split("HP_")[-1]
 
-        # Label (term name)
         label = node.get("lbl", "").strip()
         if not label:
             continue
 
-        # Definition
         definition = ""
         meta = node.get("meta", {})
-        def_list = meta.get("definition", {})
-        if isinstance(def_list, dict):
-            definition = strip_html(def_list.get("val", ""))
-        elif isinstance(def_list, list) and def_list:
-            definition = strip_html(def_list[0].get("val", ""))
+        def_raw = meta.get("definition", {})
+        if isinstance(def_raw, dict):
+            definition = strip_html(def_raw.get("val", ""))
+        elif isinstance(def_raw, list) and def_raw:
+            definition = strip_html(def_raw[0].get("val", ""))
 
-        # Synonyms
         synonyms = []
         for syn in meta.get("synonyms", []):
             val = syn.get("val", "").strip()
@@ -274,18 +290,12 @@ def parse_hp(path: str) -> dict:
     return hp_map
 
 
-#PARSER 6: clinvar_filtered.json
+# ── PARSER 6: clinvar_filtered.json ──────────────────────────────────────────
 
-def parse_clinvar(path: str) -> dict:
+def parse_clinvar(path: str) -> tuple:
     """
     Parses clinvar_filtered.json — pathogenic genetic variants.
-    Already a clean JSON array from our earlier filter script.
-
-    Fields available: variant_id, name, gene, significance,
-                      review_status, condition, condition_db_ids,
-                      variant_type, chromosome, assembly, omim_ids
-
-    Returns two structures:
+    Returns:
       gene_to_variants : {gene_symbol: [list of variant dicts]}
       omim_to_variants : {omim_id: [list of variant dicts]}
     """
@@ -301,18 +311,17 @@ def parse_clinvar(path: str) -> dict:
             continue
 
         variant = {
-            "variant_id":   rec.get("variant_id", ""),
-            "name":         rec.get("name", ""),
-            "gene":         gene,
-            "significance": rec.get("significance", ""),
-            "condition":    rec.get("condition", ""),
-            "variant_type": rec.get("variant_type", ""),
-            "review_status":rec.get("review_status", ""),
+            "variant_id":    rec.get("variant_id", ""),
+            "name":          rec.get("name", ""),
+            "gene":          gene,
+            "significance":  rec.get("significance", ""),
+            "condition":     rec.get("condition", ""),
+            "variant_type":  rec.get("variant_type", ""),
+            "review_status": rec.get("review_status", ""),
         }
 
         gene_to_variants[gene].append(variant)
 
-        # Also index by OMIM ID if present
         omim_ids = rec.get("omim_ids", "") or ""
         for part in omim_ids.split(","):
             part = part.strip()
@@ -328,16 +337,13 @@ def parse_clinvar(path: str) -> dict:
     return dict(gene_to_variants), dict(omim_to_variants)
 
 
-#PARSER 7: PubMed abstracts
+# ── PARSER 7: PubMed abstracts ────────────────────────────────────────────────
 
 def parse_pubmed(path: str) -> dict:
     """
     Parses rare_disease_abstracts.json.
     Returns dict keyed by orphacode string.
-
-    Each value is a list of abstract dicts with:
-      pmid, title, abstract, pub_year, authors, journal,
-      mesh_terms, publication_types
+    Each value is a list of abstract dicts.
     """
     with open(path, encoding="utf-8") as f:
         records = json.load(f)
@@ -355,7 +361,8 @@ def parse_pubmed(path: str) -> dict:
     return pubmed_map
 
 
-#MERGER: build unified disease records
+# ── MERGER: build unified disease records ─────────────────────────────────────
+
 def build_unified_records(
     product1_path: str,
     product4_path: str,
@@ -370,39 +377,37 @@ def build_unified_records(
     Each record has all fields + a rag_text field ready for embedding.
     """
     print("\n── Loading all data sources ──────────────────────────")
-    diseases      = parse_product1(product1_path)
-    symptom_map   = parse_product4(product4_path)
-    gene_map      = parse_product6(product6_path)
-    onset_map     = parse_product9(product9_path)
-    hp_lookup     = parse_hp(hp_path)
-    pubmed_map    = parse_pubmed(pubmed_path)
+    diseases    = parse_product1(product1_path)
+    symptom_map = parse_product4(product4_path)
+    gene_map    = parse_product6(product6_path)
+    onset_map   = parse_product9(product9_path)
+    hp_lookup   = parse_hp(hp_path)
+    pubmed_map  = parse_pubmed(pubmed_path)
 
     print("\n── Merging into unified records ──────────────────────")
 
     for code, disease in diseases.items():
 
-        # Attach symptoms from product4
+        # Symptoms from product4
         raw_symptoms = symptom_map.get(code, [])
-        # Use readable HPO terms directly — they're already in product4
-        disease["symptoms"] = [s["term"] for s in raw_symptoms]
-        # Keep full symptom data including frequency
         disease["symptoms_full"] = raw_symptoms
+        disease["symptoms"]      = [s["term"] for s in raw_symptoms]
 
-        # Attach genes from product6
+        # Genes from product6
         raw_genes = gene_map.get(code, [])
-        disease["genes"] = [g["symbol"] for g in raw_genes]
         disease["genes_full"] = raw_genes
+        disease["genes"]      = [g["symbol"] for g in raw_genes]
 
-        # Attach onset + inheritance from product9
-        onset_data = onset_map.get(code, {})
+        # Onset + inheritance from product9
+        onset_data             = onset_map.get(code, {})
         disease["onset"]       = onset_data.get("onset", [])
         disease["inheritance"] = onset_data.get("inheritance", [])
 
-        # Attach PubMed abstracts
+        # PubMed abstracts
         disease["abstracts"] = pubmed_map.get(code, [])
 
-        # Build RAG text — this is what gets embedded into FAISS
-        disease["rag_text"] = build_rag_text(disease)
+        # Build RAG text using hp_lookup for enrichment
+        disease["rag_text"] = build_rag_text(disease, hp_lookup)
 
     print(f"\n── Merge complete ────────────────────────────────────")
     print(f"Total diseases         : {len(diseases)}")
@@ -415,11 +420,12 @@ def build_unified_records(
     return diseases
 
 
-def build_rag_text(disease: dict) -> str:
+# ── RAG TEXT BUILDER ──────────────────────────────────────────────────────────
+
+def build_rag_text(disease: dict, hp_lookup: dict = None) -> str:
     """
     Builds the rich text string that gets embedded into FAISS.
-    The richer and more specific this text, the better the semantic search.
-    Order matters — most important info first.
+    Includes frequency-tiered symptoms for better diagnostic matching.
     """
     parts = []
 
@@ -434,8 +440,49 @@ def build_rag_text(disease: dict) -> str:
     if disease.get("definition"):
         parts.append(f"Description: {disease['definition']}")
 
-    # Symptoms — most important for diagnostic matching
-    if disease.get("symptoms"):
+    # ── FIX 4: Frequency-tiered symptoms ──
+    symptoms_full = disease.get("symptoms_full", [])
+    if symptoms_full:
+        obligate   = []
+        frequent   = []
+        occasional = []
+
+        for s in symptoms_full:
+            term = s["term"]
+            freq = s.get("frequency", "").lower()
+
+            # Enrich term with HPO definition if available
+            if hp_lookup and s.get("hpo_id"):
+                hp_entry = hp_lookup.get(s["hpo_id"], {})
+                hp_def   = hp_entry.get("definition", "")
+                # Only append definition if it adds useful info
+                if hp_def and hp_def.lower() != term.lower():
+                    term = f"{term}"  # keep clean, definition adds noise
+
+            if "obligate" in freq or "100%" in freq:
+                obligate.append(term)
+            elif "very frequent" in freq or "frequent" in freq:
+                frequent.append(term)
+            elif "occasional" in freq or "rare" in freq or "excluded" in freq:
+                occasional.append(term)
+            else:
+                frequent.append(term)  # default to frequent if unknown
+
+        if obligate:
+            parts.append(
+                f"Obligate features (always present): {', '.join(obligate)}"
+            )
+        if frequent:
+            parts.append(
+                f"Frequent features: {', '.join(frequent[:15])}"
+            )
+        if occasional:
+            parts.append(
+                f"Occasional features: {', '.join(occasional[:8])}"
+            )
+
+    elif disease.get("symptoms"):
+        # Fallback if symptoms_full is empty but symptoms list exists
         parts.append(f"Clinical features: {', '.join(disease['symptoms'])}")
 
     # Genetics
@@ -452,24 +499,26 @@ def build_rag_text(disease: dict) -> str:
     # Cross-references
     if disease.get("external_refs"):
         refs = ", ".join(
-            f"{src}:{code}"
-            for src, code in disease["external_refs"].items()
+            f"{src}:{ref}"
+            for src, ref in disease["external_refs"].items()
         )
         parts.append(f"Cross-references: {refs}")
 
-    # Case reports — only include abstract text, not metadata
-    abstracts = disease.get("abstracts", [])
-    for i, ab in enumerate(abstracts[:2]):  # max 2 abstracts in RAG text
+    # Case reports — max 2, truncated to 400 chars
+    for ab in disease.get("abstracts", [])[:2]:
         abstract_text = ab.get("abstract", "").strip()
         if abstract_text:
-            year  = ab.get("pub_year", "")
+            year     = ab.get("pub_year", "")
             year_str = f" ({year})" if year else ""
-            parts.append(f"Case report{year_str}: {abstract_text[:400]}")
+            parts.append(
+                f"Case report{year_str}: {abstract_text[:400]}"
+            )
 
     return "\n".join(parts)
 
 
-#TEST
+# ── TEST ─
+
 if __name__ == "__main__":
     PATHS = {
         "product1": "../datas/orpha_json/en_product1.json",
@@ -489,19 +538,15 @@ if __name__ == "__main__":
         PATHS["pubmed"],
     )
 
-    # Show 2 sample records — one with abstracts, one without
+    # Show sample records
     print("\n── Sample records ──")
 
-    # Find one with abstracts
-    with_abs = next(
-        (d for d in diseases.values() if d["abstracts"]), None
-    )
-    # Find one without
-    without_abs = next(
-        (d for d in diseases.values() if not d["abstracts"] and d["definition"]), None
-    )
+    with_abs    = next((d for d in diseases.values() if d["abstracts"]), None)
+    without_abs = next((d for d in diseases.values()
+                        if not d["abstracts"] and d["definition"]), None)
 
-    for label, sample in [("WITH abstracts", with_abs), ("WITHOUT abstracts", without_abs)]:
+    for label, sample in [("WITH abstracts", with_abs),
+                           ("WITHOUT abstracts", without_abs)]:
         if not sample:
             continue
         print(f"\n{'='*55}")
