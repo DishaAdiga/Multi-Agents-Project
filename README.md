@@ -112,7 +112,7 @@ python filter_clinvar.py
 ```
 
 
-**Final output:** `clinvar_filtered.json`, ~50–80MB.
+**Final output:** `clinvar_filtered.json`
 
 ---
 
@@ -120,21 +120,19 @@ python filter_clinvar.py
 
 This is a batch fetch — the script queries PubMed for each disease name from your Orphanet data and saves the top 5 abstracts per disease.
 
-> **Optional but recommended:** Get a free NCBI API key at https://ncbi.nlm.nih.gov/account/ — raises rate limit from 3 to 10 requests/second and speeds up the fetch significantly.
-
-Run `fetch_pubmed.py` and run it from the folder containing your Orphanet JSON files:
-
+Run `top500_disease.py` and generate a json for top500 diseases. Then run `fetch_pubmed.py`
 ```bash
 python fetch_pubmed.py
 ```
 
-**Final output:** `rare_disease_abstracts.json`, ~150–250MB.
+**Final output:** `rare_disease_abstracts.json`
 
 ---
 
 ## Source 5: LabQAR — Lab Reference Ranges
 
 Generate a sample json with around 200 reports.
+Run `generate_labqar.py` file to generate a custom input json file
 
 **Final output:** CSV/JSON files
 
