@@ -233,20 +233,20 @@ def _render_synthesis(synthesis: str):
         st.markdown(synthesis)
 
 
-#session state init
+# session state init
 if "history"      not in st.session_state: st.session_state.history      = []
 if "orchestrator" not in st.session_state: st.session_state.orchestrator = None
 if "running"      not in st.session_state: st.session_state.running      = False
 
 
-#lazy orchestrator ini
+# lazy orchestrator init
 @st.cache_resource
 def get_orchestrator():
     from orchestrator.orchestrator import Orchestrator
     return Orchestrator(verbose=False)
 
 
-#sidebar
+# ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("###  RareDx Assistant")
     st.markdown("---")
@@ -257,10 +257,10 @@ with st.sidebar:
     st.markdown("-  35 lab test panels")
     st.markdown("---")
     st.markdown("**Active Agents**")
-    st.markdown("-  Symptom Analyst")
-    st.markdown("-  Case Study Analyst")
-    st.markdown("-  Genetics Specialist")
-    st.markdown("-  Lab Interpreter")
+    st.markdown("- Symptom Analyst")
+    st.markdown("- Case Study Analyst")
+    st.markdown("- Genetics Specialist")
+    st.markdown("- Lab Interpreter")
     st.markdown("---")
     st.markdown("**Model**")
     st.markdown("`llama-3.3-70b` via Groq")
@@ -274,12 +274,12 @@ with st.sidebar:
             st.markdown(f"`{i+1}.` {h['query'][:40]}...")
 
 
-#main header
+#  main header
 st.markdown('<div class="main-title">🧬 Rare Disease Diagnostic Assistant</div>', unsafe_allow_html=True)
 st.markdown('<div class="main-subtitle">Multi-Agent RAG System · Powered by Llama 3.3 · Groq</div>', unsafe_allow_html=True)
 
 
-#input form
+# input form
 st.markdown('<div class="section-header">Patient Presentation</div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns([3, 1])
@@ -319,7 +319,7 @@ if "example" in st.session_state:
     st.rerun()
 
 
-#run analysis
+# run analysis
 if run_btn and query.strip():
 
     orchestrator = get_orchestrator()
@@ -329,25 +329,25 @@ if run_btn and query.strip():
 
     agent_cols = st.columns(4)
     agent_names = [
-        ( "Symptom",    "symptom"),
-        ( "Case Study", "case_study"),
-        ("Genetics",   "genetics"),
-        ( "Lab",        "lab"),
-    ]
+    ("Symptom",    "symptom"),
+    ("Case Study", "case_study"),
+    ("Genetics",   "genetics"),
+    ("Lab",        "lab"),
+]
     status_slots = {}
-    for col, (icon, label, key) in zip(agent_cols, agent_names):
+    for col, (label, key) in zip(agent_cols, agent_names):
         with col:
             status_slots[key] = st.empty()
             status_slots[key].markdown(
-                f'<div class="agent-card running">{icon} <b>{label}</b><br>'
+                f'<div class="agent-card running"><b>{label}</b><br>'
                 f'<span style="color:#f59e0b">⟳ Running...</span></div>',
                 unsafe_allow_html=True,
             )
 
     synthesis_slot = st.empty()
-    synthesis_slot.info(" Waiting for all agents to complete...")
+    synthesis_slot.info("⏳ Waiting for all agents to complete...")
 
-    # run orchestrator
+    #run orchestrator
     with st.spinner(""):
         report = orchestrator.run(query)
 
@@ -358,12 +358,11 @@ if run_btn and query.strip():
         "genetics":   report.genetics_result,
         "lab":        report.lab_result,
     }
-    for (icon, label, key) in agent_names:
+    for (label, key) in agent_names:
         result = agent_results[key]
         if result and not result.error:
             tools_str = ", ".join(result.tools_used) if result.tools_used else "none"
             status_slots[key].markdown(
-                f'<div class="agent-card done">{icon} <b>{label}</b><br>'
                 f'<span style="color:#10b981">✓ Done</span> · '
                 f'<span style="color:#546e8a;font-size:0.75rem">{result.rounds} round(s) · {tools_str}</span></div>',
                 unsafe_allow_html=True,
@@ -371,7 +370,6 @@ if run_btn and query.strip():
         else:
             err = result.error if result else "unknown"
             status_slots[key].markdown(
-                f'<div class="agent-card error">{icon} <b>{label}</b><br>'
                 f'<span style="color:#ef4444">✗ Error: {err[:40]}</span></div>',
                 unsafe_allow_html=True,
             )
@@ -387,12 +385,12 @@ if run_btn and query.strip():
     else:
         st.error("Synthesis failed. See raw agent outputs below.")
 
-    # raw agent outputs 
+    # raw agent outputs (collapsed)
     st.markdown('<div class="section-header">Raw Agent Outputs</div>', unsafe_allow_html=True)
 
-    for (icon, label, key) in agent_names:
+    for (label, key) in agent_names:
         result = agent_results[key]
-        with st.expander(f"{icon} {label} Agent — full output"):
+        with st.expander(f"{label} Agent — full output"):
             if result and result.answer:
                 st.markdown(result.answer)
             elif result and result.error:
@@ -406,13 +404,65 @@ if run_btn and query.strip():
         "synthesis": report.synthesis,
     })
 
-    # ── disclaimer ────────────────────────────────────────────────────────
+    #  disclaimer 
     st.markdown(
         '<div class="disclaimer">⚠ MEDICAL DISCLAIMER — This tool is for clinical decision support only. '
         'All AI-generated findings must be reviewed and verified by a qualified clinician. '
         'Do not make diagnostic or treatment decisions based solely on this output.</div>',
         unsafe_allow_html=True,
     )
-
 elif run_btn and not query.strip():
     st.warning("Please enter a clinical query before running analysis.")
+
+#  synthesis renderer
+def _render_synthesis(synthesis: str):
+    """
+    Render the synthesis text. Tries to parse ranked candidates,
+    falls back to plain markdown if parsing fails.
+    """
+    import re
+ 
+    # check if it follows our expected format
+    if "RANKED DIFFERENTIAL DIAGNOSIS" in synthesis:
+        sections = synthesis.split("CLINICAL SUMMARY")
+        dx_section = sections[0]
+        summary_section = sections[1] if len(sections) > 1 else ""
+ 
+        # extract individual candidates (numbered 1. 2. 3. etc.)
+        candidates = re.split(r'\n(?=\d+\.)', dx_section)
+        candidates = [c.strip() for c in candidates if re.match(r'^\d+\.', c.strip())]
+ 
+        for candidate in candidates:
+            # extract confidence
+            conf_match = re.search(r'Confidence:\s*(High|Medium|Low)', candidate, re.IGNORECASE)
+            confidence = conf_match.group(1) if conf_match else "Unknown"
+            badge_class = f"badge-{confidence.lower()}" if confidence in ["High","Medium","Low"] else "badge-low"
+ 
+            # extract disease name + orpha
+            first_line = candidate.split('\n')[0]
+            name_match = re.match(r'\d+\.\s+(.+?)\s+—', first_line)
+            disease_name = name_match.group(1) if name_match else first_line
+ 
+            orpha_match = re.search(r'OrphaCode:\s*(\w+)', first_line)
+            orpha = f"OrphaCode: {orpha_match.group(1)}" if orpha_match else ""
+ 
+            st.markdown(
+                f'<div class="dx-card">'
+                f'<h3>{disease_name} &nbsp; <span class="{badge_class}">{confidence} Confidence</span></h3>'
+                f'<div class="orpha">{orpha}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            # show full candidate text in expander
+            with st.expander("View evidence & next steps"):
+                st.markdown(candidate)
+ 
+        # clinical summary
+        if summary_section:
+            summary_text = summary_section.split("DISCLAIMER")[0].strip()
+            st.markdown('<div class="section-header">Clinical Summary</div>', unsafe_allow_html=True)
+            st.info(summary_text)
+ 
+    else:
+        # fallback — just render as markdown
+        st.markdown(synthesis)
