@@ -301,5 +301,3 @@ print("\nQuery: 'elevated creatine kinase muscle damage'")
 for r in search("rag/stores/lab.index", "rag/stores/lab_meta.json",
                 "elevated creatine kinase muscle damage"):
     print(f"  -> {r['test']} | High: {r['high_flag'][:60]}")
-
-print("\nPhase 2 complete — all 4 FAISS stores built and verified!")
